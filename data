@@ -1,1 +1,269 @@
 
+-- ════════════════════════════════════════════════════════════════════════
+-- DPI READINESS INDEX — SCHEMA + VIEWS + SCORING RUBRIC
+-- Kenya / Rwanda / Tanzania Digital Public Infrastructure Readiness
+--
+-- Run this file first to create the database, tables, views, and the
+-- 12-indicator scoring rubric.
+--
+-- Usage:   mysql -u root -p < 01_schema.sql
+-- Or:      paste into MySQL Workbench / DBeaver and run all.
+-- ════════════════════════════════════════════════════════════════════════
+
+CREATE DATABASE IF NOT EXISTS dpi_readiness_index
+    CHARACTER SET utf8mb4
+    COLLATE utf8mb4_unicode_ci;
+
+USE dpi_readiness_index;
+
+-- ── TABLES ──────────────────────────────────────────────────────────────
+
+-- scoring_rubric: defines each of the 12 sub-indicators (3 per dimension x
+-- 4 dimensions), their weights, scoring bands, and how transferable each
+-- indicator is across country contexts (high / conditional / low).
+CREATE TABLE IF NOT EXISTS scoring_rubric (
+    si_code            VARCHAR(10)  PRIMARY KEY,
+    si_name            VARCHAR(100) NOT NULL,
+    dimension          VARCHAR(100) NOT NULL,
+    dimension_weight   DOUBLE       NOT NULL,
+    si_weight          DOUBLE       NOT NULL,
+    rubric_10          TEXT,
+    rubric_5           TEXT,
+    rubric_2           TEXT,
+    ambition_rubric_10 TEXT,
+    ambition_rubric_5  TEXT,
+    transferability    VARCHAR(20)  CHECK (transferability IN ('high', 'conditional', 'low')),
+    transfer_reasoning TEXT
+);
+
+-- raw_indicators: the underlying sourced data point for each
+-- country x sub-indicator x year, with full source attribution.
+CREATE TABLE IF NOT EXISTS raw_indicators (
+    id           INT          PRIMARY KEY AUTO_INCREMENT,
+    country      VARCHAR(20)  NOT NULL CHECK (country IN ('Kenya', 'Rwanda', 'Tanzania')),
+    dimension    VARCHAR(100) NOT NULL,
+    si_code      VARCHAR(10)  NOT NULL,
+    si_name      VARCHAR(100) NOT NULL,
+    raw_value    DOUBLE,
+    unit         VARCHAR(100),
+    data_type    VARCHAR(20)  CHECK (data_type IN ('quantitative', 'qualitative')),
+    year         INT,
+    source       VARCHAR(255),
+    source_url   VARCHAR(500),
+    data_quality VARCHAR(20)  CHECK (data_quality IN ('hard', 'estimated', 'qualitative')),
+    CONSTRAINT uq_country_indicator_year UNIQUE (country, si_code, year),
+    FOREIGN KEY (si_code) REFERENCES scoring_rubric(si_code)
+);
+
+-- computed_scores: the analyst-assigned capability/ambition scores (1-10)
+-- derived by applying the scoring_rubric bands to each raw_indicators row.
+CREATE TABLE IF NOT EXISTS computed_scores (
+    id               INT         PRIMARY KEY AUTO_INCREMENT,
+    country          VARCHAR(20) NOT NULL CHECK (country IN ('Kenya', 'Rwanda', 'Tanzania')),
+    si_code          VARCHAR(10) NOT NULL,
+    capability_score DOUBLE      CHECK (capability_score BETWEEN 1 AND 10),
+    ambition_score   DOUBLE      CHECK (ambition_score BETWEEN 1 AND 10),
+    CONSTRAINT uq_country_si UNIQUE (country, si_code),
+    FOREIGN KEY (si_code) REFERENCES scoring_rubric(si_code)
+);
+
+-- ── VIEWS ───────────────────────────────────────────────────────────────
+
+-- alignment_gaps: per-indicator gap between stated ambition and actual
+-- capability, plus each score's contribution to the composite index.
+DROP VIEW IF EXISTS alignment_gaps;
+CREATE VIEW alignment_gaps AS
+SELECT
+    cs.country,
+    cs.si_code,
+    sr.si_name,
+    sr.dimension,
+    sr.transferability,
+    cs.capability_score,
+    cs.ambition_score,
+    ROUND(cs.ambition_score - cs.capability_score, 1) AS alignment_gap,
+    ROUND(cs.capability_score * sr.si_weight, 3)      AS weighted_capability
+FROM computed_scores cs
+JOIN scoring_rubric sr ON cs.si_code = sr.si_code
+ORDER BY cs.country, sr.dimension, cs.si_code;
+
+-- dimension_summary: capability, ambition, and alignment gap averaged
+-- (and weight-adjusted) at the dimension level (D1-D4) per country.
+DROP VIEW IF EXISTS dimension_summary;
+CREATE VIEW dimension_summary AS
+SELECT
+    cs.country,
+    sr.dimension,
+    ROUND(AVG(cs.capability_score), 2)                                     AS avg_capability,
+    ROUND(AVG(cs.ambition_score), 2)                                       AS avg_ambition,
+    ROUND(AVG(cs.ambition_score - cs.capability_score), 2)                 AS avg_alignment_gap,
+    ROUND(SUM(cs.capability_score * sr.si_weight) / SUM(sr.si_weight), 2)  AS weighted_capability
+FROM computed_scores cs
+JOIN scoring_rubric sr ON cs.si_code = sr.si_code
+GROUP BY cs.country, sr.dimension
+ORDER BY cs.country, sr.dimension;
+
+-- composite_index: single weighted composite capability/ambition/gap
+-- score per country, ranked highest-capability first. This is the
+-- headline output of the whole model.
+DROP VIEW IF EXISTS composite_index;
+CREATE VIEW composite_index AS
+SELECT
+    cs.country,
+    ROUND(SUM(cs.capability_score * sr.si_weight), 2)                       AS composite_capability,
+    ROUND(SUM(cs.ambition_score   * sr.si_weight), 2)                       AS composite_ambition,
+    ROUND(SUM((cs.ambition_score - cs.capability_score) * sr.si_weight), 2) AS composite_alignment_gap
+FROM computed_scores cs
+JOIN scoring_rubric sr ON cs.si_code = sr.si_code
+GROUP BY cs.country
+ORDER BY composite_capability DESC;
+
+-- transferability_summary: how many sub-indicators fall into each
+-- transferability tier (high / conditional / low) — used to assess how
+-- much of Rwanda's/Kenya's DPI approach could realistically transfer
+-- to Tanzania.
+DROP VIEW IF EXISTS transferability_summary;
+CREATE VIEW transferability_summary AS
+SELECT
+    transferability,
+    COUNT(*)                                              AS indicator_count,
+    GROUP_CONCAT(si_code ORDER BY si_code SEPARATOR ', ')  AS sub_indicators
+FROM scoring_rubric
+GROUP BY transferability;
+
+-- ════════════════════════════════════════════════════════════════════════
+-- SCORING RUBRIC — 12 sub-indicators across 4 dimensions
+-- D1: Infrastructure Foundation            (weight 0.25)
+-- D2: State Capacity for Digital Governance (weight 0.30)
+-- D3: Digital Public Stack Maturity         (weight 0.30)
+-- D4: Political Economy and Sustainability  (weight 0.15)
+-- ════════════════════════════════════════════════════════════════════════
+
+INSERT INTO scoring_rubric VALUES
+('1.1', 'Mobile Internet Penetration', 'D1: Infrastructure Foundation',
+ 0.25, 0.09,
+ '80%+ active mobile internet; 4G in 70%+ populated areas',
+ '40-60% active; urban strong; significant rural gap',
+ 'Below 25%; predominantly 2G; rural largely unconnected',
+ 'Funded national broadband strategy with 70%+ target by specific year; on track',
+ 'Strategy exists but aspirational and underfunded',
+ 'high',
+ 'Market-driven outcome. Replicable by competitive telco licensing and removing device import duties. No unique historical conditions required.'),
+
+('1.2', 'Mobile Money Penetration', 'D1: Infrastructure Foundation',
+ 0.25, 0.09,
+ '80%+ adults with active mobile money; dominant player with 50M+ monthly transactions; interoperable with banks',
+ '40-60% adults; competitive but fragmented; partial interoperability',
+ 'Below 30%; no dominant player; cash primary; no national interoperability switch',
+ 'National payment strategy with mandated interoperability timeline and measurable targets',
+ 'Payment strategy exists but interoperability mandate lacks enforcement or timeline',
+ 'conditional',
+ 'Requires dominant telco OR regulatory mandate. Tanzania has 63.2M active wallets and TIPS already underway. Key question: is TIPS reaching network-effect threshold?'),
+
+('1.3', 'Smartphone Penetration', 'D1: Infrastructure Foundation',
+ 0.25, 0.07,
+ '60%+ of mobile connections are smartphones; 4G-capable devices dominant',
+ '30-45% smartphone; feature phones still significant in rural areas',
+ 'Below 20%; feature phones dominant; smartphone ownership urban-concentrated',
+ 'Device access program with subsidized or financed smartphone access for low-income citizens',
+ 'Some device access initiative referenced in strategy but not funded at scale',
+ 'high',
+ 'Driven by global smartphone price deflation. Follows GDP growth with 3-5 year lag. Remove import duties and enable handset financing.'),
+
+('2.1', 'E-Government Development Index', 'D2: State Capacity for Digital Governance',
+ 0.30, 0.10,
+ 'EGDI above 0.75 (top global quartile); online service sub-index above 0.80',
+ 'EGDI 0.45-0.60; some strong sub-components but overall uneven',
+ 'EGDI below 0.35; weak across all three sub-components',
+ 'National e-government strategy with annual progress reports tied to EGDI sub-components',
+ 'E-government strategy exists but progress reporting irregular and not independently verified',
+ 'conditional',
+ 'Score is an output not an input. Use sub-component breakdown to identify Tanzania highest-leverage investment target.'),
+
+('2.2', 'Regulatory Maturity', 'D2: State Capacity for Digital Governance',
+ 0.30, 0.10,
+ 'Data protection law enacted AND enforced: 3+ documented enforcement actions in last 2 years; regulator fully operational',
+ 'Law enacted; no publicly documented enforcement actions; regulator operational but under-resourced',
+ 'Framework absent or enacted within last 12 months with zero enforcement actions; no operational DPA',
+ 'Regulatory roadmap with specific enforcement milestones, adequacy targets, and resourcing commitments',
+ 'Strategy references regulation without specific enforcement milestones',
+ 'conditional',
+ 'Legislation replicable. Tanzania PDPA in force May 2023. Enforcement capacity NOT replicable automatically. Close enforcement gap BEFORE any DPI mandate.'),
+
+('2.3', 'Government ICT Budget Percent', 'D2: State Capacity for Digital Governance',
+ 0.30, 0.10,
+ 'ICT allocation exceeds 5% of national budget; consistent YoY growth over 3+ years; not primarily donor-funded',
+ '2-4% of national budget; some variation YoY; mix of domestic and donor funding',
+ 'Below 1.5% or not separately reported; high donor dependency for meaningful ICT investment',
+ 'Multi-year ICT budget commitment in MTEF with ring-fenced allocation and performance metrics',
+ 'ICT in national budget but without multi-year commitment or ring-fencing',
+ 'low',
+ 'Reflects fiscal capacity AND political priority simultaneously. Rwanda RRA efficiency not replicable by design. Multilateral bridging finance with escalating domestic co-financing is the practical lever.'),
+
+('3.1', 'National Digital ID Coverage', 'D3: Digital Public Stack Maturity',
+ 0.30, 0.10,
+ '90%+ adults enrolled; linked to 5+ government services; digital verification available to private sector',
+ '50-70% enrolled; linked to 2-3 services; private sector access restricted',
+ 'Below 40% OR paper-enrollment only; no digital verification; no service integration',
+ 'National ID strategy with universal enrollment target, funded timeline, and service integration roadmap',
+ 'Digital ID program active but universal enrollment lacks funded time-bound roadmap',
+ 'conditional',
+ 'Technology (MOSIP) freely available. Mandate authority NOT replicable without Rwanda-level political authority. Tanzania NIDA faces load challenges. Sequence: NIDA stress-tested BEFORE digital-only mandate.'),
+
+('3.2', 'Government Services Digitized', 'D3: Digital Public Stack Maturity',
+ 0.30, 0.10,
+ '80%+ of top 20 services end-to-end online; no physical fallback; mobile-optimized; low-bandwidth capable',
+ '40-60% of top 20 online; physical fallback common; desktop-oriented; limited mobile optimization',
+ 'Portal exists but fewer than 5 services fully functional end-to-end',
+ 'Unified portal strategy with agency migration timeline, compliance requirements, and penalties for non-migration',
+ 'Unified portal planned but no agency compliance requirements or enforcement for migration',
+ 'conditional',
+ 'Service digitization replicable. Agency compliance mandate is context-specific. Copy Rwanda IremboGov binding compliance, NOT Kenya eCitizen voluntary approach.'),
+
+('3.3', 'Payment Interoperability', 'D3: Digital Public Stack Maturity',
+ 0.30, 0.10,
+ 'Full interoperability: G2P, P2G, and bank-to-mobile-money seamlessly connected; live transaction data; no bilateral agreements required',
+ 'Partial: government receives digital payments via multiple channels; G2P still partially cash; bank-to-mobile requires bilateral arrangements',
+ 'Siloed systems; mobile money and banking independent; government payments primarily cash; no national switch operational',
+ 'National payment interoperability strategy with mandated participation, open-loop standards, and measurable G2P and P2G targets',
+ 'Interoperability strategy referenced but participation not mandated; bilateral arrangements dominant',
+ 'conditional',
+ 'Regulatory framework replicable. Tanzania TIPS already copying Rwanda Mojaloop approach. Key question: TIPS transaction volumes reaching network-effect threshold?'),
+
+('4.1', 'Domestic vs Donor Funding Ratio', 'D4: Political Economy and Sustainability',
+ 0.15, 0.05,
+ '80%+ DPI investment from domestic sources; not dependent on any single donor; private sector investment growing',
+ '50-60% domestic; significant but not dominant donor dependency; some private sector co-investment',
+ 'Below 40% domestic; DPI investment would materially slow without sustained external funding',
+ 'MTEF includes DPI as protected budget line with domestic funding trajectory reducing donor dependency over defined period',
+ 'DPI in MTEF but domestic funding trajectory flat; donor dependency acknowledged but no reduction strategy',
+ 'low',
+ 'Cannot be transplanted. Recommend multilateral bridge finance with escalating domestic co-financing requirements.'),
+
+('4.2', 'Private Sector Co-Investment', 'D4: Political Economy and Sustainability',
+ 0.15, 0.05,
+ 'Documented PPP arrangements covering 2+ DPI layers; private sector shares financial risk; investment figures publicly available',
+ 'Some PPP activity but limited scope; private sector participates in delivery without risk-sharing',
+ 'DPI is government-only investment; private sector limited to delivery contracts without risk-sharing',
+ 'National PPP framework for digital infrastructure with clear risk allocation, revenue models, and regulatory oversight; at least one live transaction-based PPP operational',
+ 'PPP framework exists but general not digital-specific; no live digital PPP with documented risk-sharing',
+ 'high',
+ 'PPP structures well-documented globally. Tanzania Vodacom and Airtel are the starting point for a structured digital PPP framework.'),
+
+('4.3', 'Political Commitment Durability', 'D4: Political Economy and Sustainability',
+ 0.15, 0.05,
+ 'Multi-term cross-government digital strategy; consistent funding over 10+ years; survived at least one government change; independent monitoring body',
+ 'Digital strategy exists, current, funded, broad support; has not survived a government transition; less than 10 years track record',
+ 'Strategy exists on paper but funding repeatedly cut; no cross-party support; has not survived a government change',
+ 'Digital strategy embedded in constitution or long-term national development plan creating binding cross-government commitment',
+ 'Digital strategy in national development plan but subject to revision with each new government',
+ 'low',
+ 'Most context-specific factor in Rwanda success. Post-1994 political settlement cannot be created by policy design. Mitigation: revenue-generating DPI, open-source architectures, user constituencies, multilateral conditionality.');
+
+-- ── SANITY CHECKS ───────────────────────────────────────────────────────
+
+-- Expect 12 rows (3 sub-indicators x 4 dimensions)
+SELECT COUNT(*) AS rubric_row_count FROM scoring_rubric;
+
+-- Expect 1.00 (weights across all 12 sub-indicators should sum to 1)
+SELECT ROUND(SUM(si_weight), 2) AS total_weight FROM scoring_rubric;
