@@ -32,8 +32,10 @@ replicate Rwanda's state-capacity outcomes (low/conditional transferability),
 since those depend on political-economy conditions specific to Rwanda's
 post-1994 settlement.
 
-Full analysis and policy recommendations are in the 8-page policy brief: 
+**Full analysis and policy recommendations are in the 8-page policy brief**: 
 [DPI Readiness Index Policy Brief - Lisa Uwonkunda.pdf](https://github.com/user-attachments/files/29867618/DPI.Readiness.Index.Policy.Brief.-.Lisa.Uwonkunda.pdf)
+
+**Tableau Visualization can be found here**: https://public.tableau.com/app/profile/lisa.uwonkunda/viz/DigitalPublicInfrastructureReadinessIndex/DPIReadinessIndex?publish=yes
 
 # Tech stack
 
