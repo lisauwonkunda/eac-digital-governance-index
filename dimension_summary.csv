@@ -1,0 +1,13 @@
+country,dimension,avg_capability,avg_ambition,avg_alignment_gap,weighted_capability
+Kenya,D1: Infrastructure Foundation,6.33,7.0,0.67,6.44
+Kenya,D2: State Capacity for Digital Governance,5.67,6.67,1.0,5.67
+Kenya,D3: Digital Public Stack Maturity,6.33,7.0,0.67,6.33
+Kenya,D4: Political Economy and Sustainability,6.0,6.67,0.67,6.0
+Rwanda,D1: Infrastructure Foundation,5.0,8.0,3.0,5.08
+Rwanda,D2: State Capacity for Digital Governance,6.33,8.33,2.0,6.33
+Rwanda,D3: Digital Public Stack Maturity,9.0,9.0,0.0,9.0
+Rwanda,D4: Political Economy and Sustainability,6.33,8.33,2.0,6.33
+Tanzania,D1: Infrastructure Foundation,4.33,6.33,2.0,4.44
+Tanzania,D2: State Capacity for Digital Governance,3.0,5.67,2.67,3.0
+Tanzania,D3: Digital Public Stack Maturity,3.5,7.5,4.0,3.5
+Tanzania,D4: Political Economy and Sustainability,3.0,6.0,3.0,3.0
