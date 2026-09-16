@@ -18,7 +18,7 @@ country-specific political or historical conditions.
 (stated policy target) for each indicator, and derives the alignment
 gap between them.
  - Rolls indicator-level scores into a weighted composite index per
-country — the headline output of the model.
+country. 
 
 
 # Key finding
